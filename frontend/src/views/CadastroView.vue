@@ -44,19 +44,20 @@ async function cadastrar() {
 
 </script>
 
+
 <template>
   <main class="pagina-cadastro">
     <h1>Criar conta</h1>
     <p>Comece sua evolução no SGE.</p>
 
-    <form>
-      <form @submit.prevent="cadastrar"></form>
+    <form @submit.prevent="cadastrar">
       <label for="nome">Nome completo</label>
       <input
         id="nome"
         v-model="nome"
         type="text"
         placeholder="Digite seu nome"
+        required
       />
 
       <label for="email">E-mail</label>
@@ -65,6 +66,7 @@ async function cadastrar() {
         v-model="email"
         type="email"
         placeholder="voce@exemplo.com"
+        required
       />
 
       <label for="senha">Senha</label>
@@ -73,6 +75,7 @@ async function cadastrar() {
         v-model="senha"
         type="password"
         placeholder="Crie uma senha"
+        required
       />
 
       <label for="confirmarSenha">Confirmar senha</label>
@@ -81,6 +84,7 @@ async function cadastrar() {
         v-model="confirmarSenha"
         type="password"
         placeholder="Digite a senha novamente"
+        required
       />
 
       <button type="submit">Criar minha conta</button>
@@ -88,12 +92,13 @@ async function cadastrar() {
 
     <p>
       Já tem uma conta?
-      <button @click="router.push('/login')">
+      <button type="button" @click="router.push('/login')">
         Entrar
       </button>
     </p>
   </main>
 </template>
+
 
 ```css
 <style scoped>

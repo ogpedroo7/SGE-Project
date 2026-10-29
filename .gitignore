@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Banco de dados local
+backend/*.db
+backend/*.db-journal
+
+# Vue / Node
+frontend/node_modules/
+frontend/dist/
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Editor e sistema
+.vscode/
+.DS_Store

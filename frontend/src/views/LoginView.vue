@@ -32,6 +32,7 @@ async function entrar() {
     }
 
     localStorage.setItem('usuario', JSON.stringify(dados.usuario))
+    localStorage.setItem('token', dados.access_token)
 
     router.push('/dashboard')
   } catch (erro) {

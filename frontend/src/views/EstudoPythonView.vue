@@ -75,6 +75,7 @@ async function requisicao(url, opcoes = {}) {
     ...opcoes,
     headers: {
       'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('token')}`,
       ...(opcoes.headers || {})
     }
   })

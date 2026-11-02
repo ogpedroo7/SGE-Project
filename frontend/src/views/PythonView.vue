@@ -38,8 +38,11 @@ async function carregarProgresso() {
   erro.value = ''
 
   try {
-    const resposta = await fetch(urlProgresso())
-
+    const resposta = await fetch(urlProgresso(), {
+  headers: {
+    'Authorization': `Bearer ${localStorage.getItem('token')}`
+  }
+})
     const dados = await resposta.json()
 
     if (!resposta.ok) {
@@ -77,8 +80,9 @@ async function salvarProgresso() {
     const resposta = await fetch(urlProgresso(), {
       method: 'PUT',
       headers: {
-        'Content-Type': 'application/json'
-      },
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('token')}`
+},
       body: JSON.stringify({
         horas_estudadas: horasEstudadas.value,
         progresso: progresso.value,

@@ -3,8 +3,12 @@ import hmac
 import json
 import secrets
 import sqlite3
+import os
+import jwt
+from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -12,6 +16,63 @@ from backend.database import conectar_banco, criar_tabelas
 
 
 app = FastAPI(title="SGE - API", version="2.0.0")
+
+CHAVE_SECRETA = os.getenv("STUDYCORE_SECRET_KEY")
+
+if not CHAVE_SECRETA:
+    raise RuntimeError(
+        "A variável STUDYCORE_SECRET_KEY não foi configurada."
+    )
+
+ALGORITMO_TOKEN = "HS256"
+TEMPO_TOKEN_HORAS = 2
+
+seguranca = HTTPBearer()
+
+
+def criar_token(usuario_id: int) -> str:
+    agora = datetime.now(timezone.utc)
+
+    payload = {
+        "sub": str(usuario_id),
+        "iat": agora,
+        "exp": agora + timedelta(hours=TEMPO_TOKEN_HORAS),
+    }
+
+    return jwt.encode(
+        payload,
+        CHAVE_SECRETA,
+        algorithm=ALGORITMO_TOKEN,
+    )
+
+
+def verificar_token(
+    usuario_id: int,
+    credenciais: HTTPAuthorizationCredentials = Depends(seguranca),
+):
+    try:
+        payload = jwt.decode(
+            credenciais.credentials,
+            CHAVE_SECRETA,
+            algorithms=[ALGORITMO_TOKEN],
+        )
+
+        usuario_token = int(payload["sub"])
+
+    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail="Token inválido ou expirado.",
+        )
+
+    if usuario_token != usuario_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Você não pode acessar os dados de outro usuário.",
+        )
+
+    return usuario_token
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -190,45 +251,65 @@ def verificar_senha(senha, senha_hash):
 def validar_materia(materia):
     materia = materia.strip()
     if not materia or len(materia) > 100:
-        raise HTTPException(422, "A matéria deve ter entre 1 e 100 caracteres.")
+        raise HTTPException(
+            422,
+            "A matéria deve ter entre 1 e 100 caracteres."
+        )
     return materia
 
 
 def buscar_usuario(usuario_id):
     with conectar_banco() as conexao:
         usuario = conexao.execute(
-            "SELECT id FROM usuarios WHERE id = ?", (usuario_id,)
+            "SELECT id FROM usuarios WHERE id = ?",
+            (usuario_id,),
         ).fetchone()
+
     if usuario is None:
         raise HTTPException(404, "Usuário não encontrado.")
 
 
 def obter_estado(usuario_id, materia):
     buscar_usuario(usuario_id)
+
     with conectar_banco() as conexao:
         conexao.execute(
-            "INSERT OR IGNORE INTO progresso_aulas (usuario_id, materia) VALUES (?, ?)",
+            """
+            INSERT OR IGNORE INTO progresso_aulas (usuario_id, materia)
+            VALUES (?, ?)
+            """,
             (usuario_id, materia),
         )
+
         estado = conexao.execute(
-            "SELECT * FROM progresso_aulas WHERE usuario_id = ? AND materia = ?",
+            """
+            SELECT * FROM progresso_aulas
+            WHERE usuario_id = ? AND materia = ?
+            """,
             (usuario_id, materia),
         ).fetchone()
+
     return dict(estado)
 
 
 def progresso_percentual(usuario_id, materia):
     with conectar_banco() as conexao:
         registros = conexao.execute(
-            "SELECT paginas_concluidas FROM progresso_aulas WHERE usuario_id = ? AND materia = ?",
+            """
+            SELECT paginas_concluidas FROM progresso_aulas
+            WHERE usuario_id = ? AND materia = ?
+            """,
             (usuario_id, materia),
         ).fetchall()
+
     paginas = set()
+
     for registro in registros:
         try:
             paginas.update(json.loads(registro["paginas_concluidas"]))
         except (TypeError, json.JSONDecodeError):
             pass
+
     return min(100, round(len(paginas) / 100 * 100))
 
 
@@ -236,6 +317,7 @@ def atualizar_resumo(usuario_id, materia):
     estado = obter_estado(usuario_id, materia)
     percentual = progresso_percentual(usuario_id, materia)
     horas = int(estado["segundos_estudados"]) / 3600
+
     with conectar_banco() as conexao:
         conexao.execute(
             """
@@ -247,22 +329,42 @@ def atualizar_resumo(usuario_id, materia):
                 progresso = excluded.progresso,
                 nivel = excluded.nivel
             """,
-            (usuario_id, materia, horas, percentual, estado["nivel"]),
+            (
+                usuario_id,
+                materia,
+                horas,
+                percentual,
+                estado["nivel"],
+            ),
         )
 
 
 def exigir_nivel_disponivel(usuario_id, materia, nivel):
     estado = obter_estado(usuario_id, materia)
+
     if nivel > estado["nivel"]:
         raise HTTPException(403, "Esse nível ainda está bloqueado.")
+
     if materia.lower() != "python":
-        raise HTTPException(404, "O conteúdo desta matéria ainda não foi criado.")
+        raise HTTPException(
+            404,
+            "O conteúdo desta matéria ainda não foi criado."
+        )
 
 
 def obter_aula(nivel, pagina):
     if not 1 <= nivel <= 10 or not 1 <= pagina <= 10:
         raise HTTPException(404, "Aula não encontrada.")
-    titulo, conteudo, codigo, pergunta, opcoes, resposta = CONTEUDO[nivel - 1][pagina - 1]
+
+    (
+        titulo,
+        conteudo,
+        codigo,
+        pergunta,
+        opcoes,
+        resposta,
+    ) = CONTEUDO[nivel - 1][pagina - 1]
+
     return {
         "nivel": nivel,
         "pagina": pagina,
@@ -285,8 +387,12 @@ def exigir_paginas_concluidas(usuario_id, materia, nivel):
     estado = obter_estado(usuario_id, materia)
     paginas = set(json.loads(estado["paginas_concluidas"]))
     necessarias = {f"{nivel}:{p}" for p in range(1, 11)}
+
     if not necessarias.issubset(paginas):
-        raise HTTPException(403, "Conclua as 10 páginas deste nível primeiro.")
+        raise HTTPException(
+            403,
+            "Conclua as 10 páginas deste nível primeiro."
+        )
 
 
 class CadastroUsuario(BaseModel):
@@ -328,29 +434,47 @@ class RespostaQuiz(BaseModel):
 
 @app.get("/status")
 def status():
-    return {"mensagem": "StudyCore está funcionando!", "versao": "2.0.0"}
+    return {
+        "mensagem": "SGE está funcionando!",
+        "versao": "2.0.0",
+    }
 
 
 @app.post("/usuarios/cadastro", status_code=201)
 def cadastrar_usuario(dados: CadastroUsuario):
     nome = dados.nome.strip()
     email = dados.email.strip().lower()
-    if len(nome) < 2 or "@" not in email or "." not in email.split("@")[-1]:
+
+    if (
+        len(nome) < 2
+        or "@" not in email
+        or "." not in email.split("@")[-1]
+    ):
         raise HTTPException(400, "Informe um nome e um e-mail válidos.")
+
     try:
         with conectar_banco() as conexao:
             cursor = conexao.execute(
-                "INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)",
+                """
+                INSERT INTO usuarios (nome, email, senha_hash)
+                VALUES (?, ?, ?)
+                """,
                 (nome, email, gerar_hash_senha(dados.senha)),
             )
             usuario_id = cursor.lastrowid
+
     except sqlite3.IntegrityError as erro:
         if "UNIQUE constraint failed" in str(erro):
             raise HTTPException(409, "Este e-mail já está cadastrado.")
         raise
+
     return {
         "mensagem": "Conta criada com sucesso!",
-        "usuario": {"id": usuario_id, "nome": nome, "email": email},
+        "usuario": {
+            "id": usuario_id,
+            "nome": nome,
+            "email": email,
+        },
     }
 
 
@@ -358,13 +482,24 @@ def cadastrar_usuario(dados: CadastroUsuario):
 def login(dados: LoginUsuario):
     with conectar_banco() as conexao:
         usuario = conexao.execute(
-            "SELECT id, nome, email, senha_hash FROM usuarios WHERE email = ?",
+            """
+            SELECT id, nome, email, senha_hash
+            FROM usuarios
+            WHERE email = ?
+            """,
             (dados.email.strip().lower(),),
         ).fetchone()
-    if usuario is None or not verificar_senha(dados.senha, usuario["senha_hash"]):
+
+    if usuario is None or not verificar_senha(
+        dados.senha,
+        usuario["senha_hash"],
+    ):
         raise HTTPException(401, "E-mail ou senha incorretos.")
+
     return {
         "mensagem": "Login realizado com sucesso!",
+        "access_token": criar_token(usuario["id"]),
+        "token_type": "bearer",
         "usuario": {
             "id": usuario["id"],
             "nome": usuario["nome"],
@@ -373,27 +508,52 @@ def login(dados: LoginUsuario):
     }
 
 
-@app.get("/usuarios/{usuario_id}/progresso")
+# Lista o progresso de todas as matérias do usuário.
+@app.get(
+    "/usuarios/{usuario_id}/progresso",
+    dependencies=[Depends(verificar_token)],
+)
 def listar_progressos(usuario_id: int):
     buscar_usuario(usuario_id)
+
     with conectar_banco() as conexao:
         registros = conexao.execute(
-            "SELECT materia, horas_estudadas, progresso, nivel FROM progresso_estudos WHERE usuario_id = ? ORDER BY materia",
+            """
+            SELECT materia, horas_estudadas, progresso, nivel
+            FROM progresso_estudos
+            WHERE usuario_id = ?
+            ORDER BY materia
+            """,
             (usuario_id,),
         ).fetchall()
+
     return {"progressos": [dict(r) for r in registros]}
 
 
-@app.get("/usuarios/{usuario_id}/materias/{materia}/progresso")
+# Consulta o progresso de uma matéria específica.
+@app.get(
+    "/usuarios/{usuario_id}/materias/{materia}/progresso",
+    dependencies=[Depends(verificar_token)],
+)
 def obter_progresso(usuario_id: int, materia: str):
     materia = validar_materia(materia)
     atualizar_resumo(usuario_id, materia)
+
     with conectar_banco() as conexao:
         registro = conexao.execute(
-            "SELECT materia, horas_estudadas, progresso, nivel FROM progresso_estudos WHERE usuario_id = ? AND materia = ?",
+            """
+            SELECT materia, horas_estudadas, progresso, nivel
+            FROM progresso_estudos
+            WHERE usuario_id = ? AND materia = ?
+            """,
             (usuario_id, materia),
         ).fetchone()
+
     estado = obter_estado(usuario_id, materia)
+
+    if registro is None:
+        raise HTTPException(404, "Progresso não encontrado.")
+
     return {
         **dict(registro),
         "segundos_estudados": estado["segundos_estudados"],
@@ -401,21 +561,38 @@ def obter_progresso(usuario_id: int, materia: str):
     }
 
 
-@app.get("/usuarios/{usuario_id}/materias/{materia}/curso")
+# Consulta o estado completo do curso.
+@app.get(
+    "/usuarios/{usuario_id}/materias/{materia}/curso",
+    dependencies=[Depends(verificar_token)],
+)
 def obter_curso(usuario_id: int, materia: str):
     materia = validar_materia(materia)
     estado = obter_estado(usuario_id, materia)
+
     with conectar_banco() as conexao:
         niveis = conexao.execute(
-            "SELECT nivel, resumo_concluido, aprovado FROM niveis_curso WHERE usuario_id = ? AND materia = ? ORDER BY nivel",
+            """
+            SELECT nivel, resumo_concluido, aprovado
+            FROM niveis_curso
+            WHERE usuario_id = ? AND materia = ?
+            ORDER BY nivel
+            """,
             (usuario_id, materia),
         ).fetchall()
+
         respostas = conexao.execute(
-            "SELECT nivel, questao_id, resposta, acertou FROM respostas_quiz WHERE usuario_id = ? AND materia = ? ORDER BY nivel, questao_id",
+            """
+            SELECT nivel, questao_id, resposta, acertou
+            FROM respostas_quiz
+            WHERE usuario_id = ? AND materia = ?
+            ORDER BY nivel, questao_id
+            """,
             (usuario_id, materia),
         ).fetchall()
 
     paginas = json.loads(estado["paginas_concluidas"])
+
     return {
         "curso": materia,
         "estado": {**estado, "paginas_concluidas": paginas},
@@ -425,22 +602,38 @@ def obter_curso(usuario_id: int, materia: str):
     }
 
 
-@app.get("/usuarios/{usuario_id}/materias/{materia}/curso/aula")
-def carregar_aula(usuario_id: int, materia: str, nivel: int = 1, pagina: int = 1):
+# Carrega uma aula específica.
+@app.get(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/aula",
+    dependencies=[Depends(verificar_token)],
+)
+def carregar_aula(
+    usuario_id: int,
+    materia: str,
+    nivel: int = 1,
+    pagina: int = 1,
+):
     materia = validar_materia(materia)
     exigir_nivel_disponivel(usuario_id, materia, nivel)
     return obter_aula(nivel, pagina)
 
 
-@app.put("/usuarios/{usuario_id}/materias/{materia}/curso/pagina")
-def salvar_pagina(usuario_id: int, materia: str, dados: SalvarPagina):
+# Salva a posição atual do aluno.
+@app.put(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/pagina",
+    dependencies=[Depends(verificar_token)],
+)
+def salvar_pagina(
+    usuario_id: int,
+    materia: str,
+    dados: SalvarPagina,
+):
     materia = validar_materia(materia)
     exigir_nivel_disponivel(usuario_id, materia, dados.nivel)
 
     estado = obter_estado(usuario_id, materia)
     paginas = set(json.loads(estado["paginas_concluidas"]))
 
-    # Não permite marcar a página como concluída sem responder corretamente.
     if dados.concluir and f"{dados.nivel}:{dados.pagina}" not in paginas:
         raise HTTPException(
             403,
@@ -456,7 +649,9 @@ def salvar_pagina(usuario_id: int, materia: str, dados: SalvarPagina):
             """,
             (dados.nivel, dados.pagina, usuario_id, materia),
         )
+
     atualizar_resumo(usuario_id, materia)
+
     return {
         "mensagem": "Posição de estudo salva.",
         "nivel": dados.nivel,
@@ -465,18 +660,23 @@ def salvar_pagina(usuario_id: int, materia: str, dados: SalvarPagina):
     }
 
 
-@app.post("/usuarios/{usuario_id}/materias/{materia}/curso/aula/responder")
-def responder_aula(usuario_id: int, materia: str, dados: RespostaAula):
+# Registra a resposta de um exercício de aula.
+@app.post(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/aula/responder",
+    dependencies=[Depends(verificar_token)],
+)
+def responder_aula(
+    usuario_id: int,
+    materia: str,
+    dados: RespostaAula,
+):
     materia = validar_materia(materia)
     exigir_nivel_disponivel(usuario_id, materia, dados.nivel)
 
-    # Valida a página e registra que o aluno respondeu.
     resposta_correta(dados.nivel, dados.pagina)
 
     estado = obter_estado(usuario_id, materia)
     paginas = set(json.loads(estado["paginas_concluidas"]))
-
-    # A página é concluída independentemente de a resposta estar certa.
     paginas.add(f"{dados.nivel}:{dados.pagina}")
 
     with conectar_banco() as conexao:
@@ -500,17 +700,26 @@ def responder_aula(usuario_id: int, materia: str, dados: RespostaAula):
 
     atualizar_resumo(usuario_id, materia)
 
-    # Não revela se a resposta estava certa ou errada durante a aula.
     return {
         "mensagem": "Resposta registrada. Você já pode continuar.",
         "paginas_concluidas": sorted(paginas),
         "progresso": progresso_percentual(usuario_id, materia),
     }
 
-@app.post("/usuarios/{usuario_id}/materias/{materia}/curso/tempo")
-def registrar_tempo(usuario_id: int, materia: str, dados: RegistrarTempo):
+
+# Registra o tempo estudado.
+@app.post(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/tempo",
+    dependencies=[Depends(verificar_token)],
+)
+def registrar_tempo(
+    usuario_id: int,
+    materia: str,
+    dados: RegistrarTempo,
+):
     materia = validar_materia(materia)
     obter_estado(usuario_id, materia)
+
     with conectar_banco() as conexao:
         conexao.execute(
             """
@@ -521,20 +730,35 @@ def registrar_tempo(usuario_id: int, materia: str, dados: RegistrarTempo):
             """,
             (dados.segundos, usuario_id, materia),
         )
+
     atualizar_resumo(usuario_id, materia)
+
     with conectar_banco() as conexao:
         segundos = conexao.execute(
-            "SELECT segundos_estudados FROM progresso_aulas WHERE usuario_id = ? AND materia = ?",
+            """
+            SELECT segundos_estudados
+            FROM progresso_aulas
+            WHERE usuario_id = ? AND materia = ?
+            """,
             (usuario_id, materia),
         ).fetchone()["segundos_estudados"]
+
     return {
         "segundos_estudados": segundos,
         "horas_estudadas": round(segundos / 3600, 2),
     }
 
 
-@app.post("/usuarios/{usuario_id}/materias/{materia}/curso/resumo")
-def concluir_resumo(usuario_id: int, materia: str, dados: NivelRequest):
+# Registra a conclusão do resumo de um nível.
+@app.post(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/resumo",
+    dependencies=[Depends(verificar_token)],
+)
+def concluir_resumo(
+    usuario_id: int,
+    materia: str,
+    dados: NivelRequest,
+):
     materia = validar_materia(materia)
     exigir_nivel_disponivel(usuario_id, materia, dados.nivel)
     exigir_paginas_concluidas(usuario_id, materia, dados.nivel)
@@ -542,10 +766,13 @@ def concluir_resumo(usuario_id: int, materia: str, dados: NivelRequest):
     with conectar_banco() as conexao:
         conexao.execute(
             """
-            INSERT INTO niveis_curso (usuario_id, materia, nivel, resumo_concluido)
+            INSERT INTO niveis_curso
+                (usuario_id, materia, nivel, resumo_concluido)
             VALUES (?, ?, ?, 1)
             ON CONFLICT(usuario_id, materia, nivel)
-            DO UPDATE SET resumo_concluido = 1, atualizado_em = CURRENT_TIMESTAMP
+            DO UPDATE SET
+                resumo_concluido = 1,
+                atualizado_em = CURRENT_TIMESTAMP
             """,
             (usuario_id, materia, dados.nivel),
         )
@@ -556,29 +783,47 @@ def concluir_resumo(usuario_id: int, materia: str, dados: NivelRequest):
     }
 
 
-@app.get("/usuarios/{usuario_id}/materias/{materia}/curso/quiz")
-def obter_quiz(usuario_id: int, materia: str, nivel: int = 1):
+# Carrega as questões do quiz.
+@app.get(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/quiz",
+    dependencies=[Depends(verificar_token)],
+)
+def obter_quiz(
+    usuario_id: int,
+    materia: str,
+    nivel: int = 1,
+):
     materia = validar_materia(materia)
     exigir_nivel_disponivel(usuario_id, materia, nivel)
     exigir_paginas_concluidas(usuario_id, materia, nivel)
 
     with conectar_banco() as conexao:
         resumo = conexao.execute(
-            "SELECT resumo_concluido FROM niveis_curso WHERE usuario_id = ? AND materia = ? AND nivel = ?",
+            """
+            SELECT resumo_concluido
+            FROM niveis_curso
+            WHERE usuario_id = ? AND materia = ? AND nivel = ?
+            """,
             (usuario_id, materia, nivel),
         ).fetchone()
+
         respostas = conexao.execute(
-            "SELECT questao_id, resposta, acertou FROM respostas_quiz WHERE usuario_id = ? AND materia = ? AND nivel = ?",
+            """
+            SELECT questao_id, resposta, acertou
+            FROM respostas_quiz
+            WHERE usuario_id = ? AND materia = ? AND nivel = ?
+            """,
             (usuario_id, materia, nivel),
         ).fetchall()
 
     if resumo is None or not resumo["resumo_concluido"]:
         raise HTTPException(403, "Conclua o resumo antes do quiz.")
 
-    # As dez questões do nível são baseadas nas dez aulas.
     perguntas = []
+
     for pagina, item in enumerate(CONTEUDO[nivel - 1], start=1):
         titulo, conteudo, codigo, pergunta, opcoes, _ = item
+
         perguntas.append({
             "id": str(pagina),
             "pergunta": pergunta,
@@ -596,8 +841,16 @@ def obter_quiz(usuario_id: int, materia: str, nivel: int = 1):
     }
 
 
-@app.post("/usuarios/{usuario_id}/materias/{materia}/curso/quiz/responder")
-def responder_quiz(usuario_id: int, materia: str, dados: RespostaQuiz):
+# Registra e corrige uma resposta do quiz.
+@app.post(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/quiz/responder",
+    dependencies=[Depends(verificar_token)],
+)
+def responder_quiz(
+    usuario_id: int,
+    materia: str,
+    dados: RespostaQuiz,
+):
     materia = validar_materia(materia)
     exigir_nivel_disponivel(usuario_id, materia, dados.nivel)
     exigir_paginas_concluidas(usuario_id, materia, dados.nivel)
@@ -612,21 +865,25 @@ def responder_quiz(usuario_id: int, materia: str, dados: RespostaQuiz):
 
     with conectar_banco() as conexao:
         resumo = conexao.execute(
-            "SELECT resumo_concluido FROM niveis_curso WHERE usuario_id = ? AND materia = ? AND nivel = ?",
+            """
+            SELECT resumo_concluido
+            FROM niveis_curso
+            WHERE usuario_id = ? AND materia = ? AND nivel = ?
+            """,
             (usuario_id, materia, dados.nivel),
         ).fetchone()
 
     if resumo is None or not resumo["resumo_concluido"]:
         raise HTTPException(403, "Conclua o resumo antes do quiz.")
 
-    # A resposta é corrigida no servidor; o navegador não envia um booleano "correta".
     correta = resposta_correta(dados.nivel, pagina)
     acertou_agora = dados.resposta.strip().lower() == correta
 
     with conectar_banco() as conexao:
         anterior = conexao.execute(
             """
-            SELECT acertou FROM respostas_quiz
+            SELECT acertou
+            FROM respostas_quiz
             WHERE usuario_id = ? AND materia = ? AND nivel = ? AND questao_id = ?
             """,
             (usuario_id, materia, dados.nivel, dados.questao_id),
@@ -659,7 +916,9 @@ def responder_quiz(usuario_id: int, materia: str, dados: RespostaQuiz):
 
         total = conexao.execute(
             """
-            SELECT COUNT(*) AS respondidas, COALESCE(SUM(acertou), 0) AS acertos
+            SELECT
+                COUNT(*) AS respondidas,
+                COALESCE(SUM(acertou), 0) AS acertos
             FROM respostas_quiz
             WHERE usuario_id = ? AND materia = ? AND nivel = ?
             """,
@@ -675,16 +934,20 @@ def responder_quiz(usuario_id: int, materia: str, dados: RespostaQuiz):
                     (usuario_id, materia, nivel, resumo_concluido, aprovado)
                 VALUES (?, ?, ?, 1, 1)
                 ON CONFLICT(usuario_id, materia, nivel)
-                DO UPDATE SET aprovado = 1, atualizado_em = CURRENT_TIMESTAMP
+                DO UPDATE SET
+                    aprovado = 1,
+                    atualizado_em = CURRENT_TIMESTAMP
                 """,
                 (usuario_id, materia, dados.nivel),
             )
 
             proximo = min(10, dados.nivel + 1)
+
             conexao.execute(
                 """
                 UPDATE progresso_aulas
-                SET nivel = ?, pagina = 1, atualizado_em = CURRENT_TIMESTAMP
+                SET nivel = ?, pagina = 1,
+                    atualizado_em = CURRENT_TIMESTAMP
                 WHERE usuario_id = ? AND materia = ?
                 """,
                 (proximo, usuario_id, materia),
@@ -695,7 +958,8 @@ def responder_quiz(usuario_id: int, materia: str, dados: RespostaQuiz):
     with conectar_banco() as conexao:
         erradas = conexao.execute(
             """
-            SELECT questao_id FROM respostas_quiz
+            SELECT questao_id
+            FROM respostas_quiz
             WHERE usuario_id = ? AND materia = ? AND nivel = ? AND acertou = 0
             ORDER BY CAST(questao_id AS INTEGER)
             """,

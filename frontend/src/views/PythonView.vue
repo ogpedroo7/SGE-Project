@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { requisicaoAutenticada } from '../auth'
 
 const router = useRouter()
 
@@ -38,11 +39,7 @@ async function carregarProgresso() {
   erro.value = ''
 
   try {
-    const resposta = await fetch(urlProgresso(), {
-  headers: {
-    'Authorization': `Bearer ${localStorage.getItem('token')}`
-  }
-})
+    const resposta = await requisicaoAutenticada(urlProgresso())
     const dados = await resposta.json()
 
     if (!resposta.ok) {
@@ -77,18 +74,17 @@ async function salvarProgresso() {
   salvando.value = true
 
   try {
-    const resposta = await fetch(urlProgresso(), {
-      method: 'PUT',
-      headers: {
-  'Content-Type': 'application/json',
-  'Authorization': `Bearer ${localStorage.getItem('token')}`
-},
-      body: JSON.stringify({
-        horas_estudadas: horasEstudadas.value,
-        progresso: progresso.value,
-        nivel: nivel.value
-      })
-    })
+    const resposta = await requisicaoAutenticada(urlProgresso(), {
+  method: 'PUT',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    horas_estudadas: horasEstudadas.value,
+    progresso: progresso.value,
+    nivel: nivel.value
+  })
+})
 
     const dados = await resposta.json()
 

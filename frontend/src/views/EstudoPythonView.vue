@@ -1,7 +1,7 @@
-
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { requisicaoAutenticada } from '../auth'
 
 const router = useRouter()
 const API = 'http://127.0.0.1:8000'
@@ -71,11 +71,10 @@ const quantidadeQuiz = computed(() => quiz.value.length)
 const numeroQuestao = computed(() => indiceQuiz.value + 1)
 
 async function requisicao(url, opcoes = {}) {
-  const respostaApi = await fetch(`${API}${url}`, {
+  const respostaApi = await requisicaoAutenticada(`${API}${url}`, {
     ...opcoes,
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
       ...(opcoes.headers || {})
     }
   })
@@ -92,6 +91,7 @@ async function requisicao(url, opcoes = {}) {
 
   return dados
 }
+
 
 function caminhoCurso(sufixo = '') {
   return `/usuarios/${usuario.id}/materias/${materia}/curso${sufixo}`

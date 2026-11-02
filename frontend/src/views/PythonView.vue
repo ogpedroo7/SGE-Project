@@ -6,68 +6,110 @@ const router = useRouter()
 
 const horasEstudadas = ref(0)
 const progresso = ref(0)
+const nivel = ref(1)
 const jaComecou = ref(false)
 const carregando = ref(true)
+const salvando = ref(false)
 const erro = ref('')
 
-async function carregarProgresso() {
-  try {
-    const resposta = await fetch('http://127.0.0.1:8000/python/progresso')
+const API = 'http://127.0.0.1:8000'
 
-    if (!resposta.ok) {
-      throw new Error('Não foi possível carregar o progresso.')
-    }
+function obterUsuario() {
+  try {
+    return JSON.parse(localStorage.getItem('usuario') || 'null')
+  } catch {
+    return null
+  }
+}
+
+function urlProgresso() {
+  const usuario = obterUsuario()
+
+  if (!usuario?.id) {
+    router.push('/login')
+    throw new Error('Entre na sua conta para acessar seu progresso.')
+  }
+
+  return `${API}/usuarios/${usuario.id}/materias/Python/progresso`
+}
+
+async function carregarProgresso() {
+  carregando.value = true
+  erro.value = ''
+
+  try {
+    const resposta = await fetch(urlProgresso())
 
     const dados = await resposta.json()
 
+    if (!resposta.ok) {
+      throw new Error(dados.detail || 'Não foi possível carregar o progresso.')
+    }
+
     horasEstudadas.value = dados.horas_estudadas
     progresso.value = dados.progresso
-  } catch (erroRecebido) {
-    erro.value = erroRecebido.message
-    console.error('Erro ao buscar progresso:', erroRecebido)
+    nivel.value = dados.nivel
+    jaComecou.value = dados.progresso > 0 || dados.horas_estudadas > 0
+  } catch (e) {
+    erro.value = e.message || 'Não foi possível conectar ao servidor.'
   } finally {
     carregando.value = false
   }
 }
 
-onMounted
-
-
 async function salvarProgresso() {
-  try {
-    erro.value = ''
+  erro.value = ''
 
-    const resposta = await fetch('http://127.0.0.1:8000/python/progresso', {
+  if (
+    !Number.isFinite(horasEstudadas.value) ||
+    horasEstudadas.value < 0 ||
+    !Number.isInteger(progresso.value) ||
+    progresso.value < 0 ||
+    progresso.value > 100
+  ) {
+    erro.value = 'Informe horas válidas e um progresso inteiro entre 0 e 100.'
+    return
+  }
+
+  salvando.value = true
+
+  try {
+    const resposta = await fetch(urlProgresso(), {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         horas_estudadas: horasEstudadas.value,
-        progresso: progresso.value
+        progresso: progresso.value,
+        nivel: nivel.value
       })
     })
 
+    const dados = await resposta.json()
+
     if (!resposta.ok) {
-      throw new Error('Não foi possível salvar o progresso.')
+      throw new Error(dados.detail || 'Não foi possível salvar o progresso.')
     }
 
-    const dados = await resposta.json()
     horasEstudadas.value = dados.horas_estudadas
     progresso.value = dados.progresso
-  } catch (erroRecebido) {
-    erro.value = erroRecebido.message
-    console.error('Erro ao salvar progresso:', erroRecebido)
+    nivel.value = dados.nivel
+    jaComecou.value = dados.progresso > 0 || dados.horas_estudadas > 0
+
+    alert('Progresso salvo com sucesso!')
+  } catch (e) {
+    erro.value = e.message || 'Não foi possível conectar ao servidor.'
+  } finally {
+    salvando.value = false
   }
 }
 
-
-(carregarProgresso)
-
 function iniciarEstudos() {
-  jaComecou.value = true
   router.push('/python/estudo')
 }
+
+onMounted(carregarProgresso)
 </script>
 
 <template>
@@ -84,47 +126,47 @@ function iniciarEstudos() {
       </p>
     </header>
 
-    <section class="resumo">
-      <article class="card-resumo">
-        <h2>Horas estudadas</h2>
-        <p>{{ horasEstudadas }} h</p>
-      </article>
+    <p v-if="carregando">Carregando seu progresso...</p>
+    <p v-else-if="erro" class="mensagem-erro">{{ erro }}</p>
 
-      <article class="card-resumo">
-        <h2>Progresso geral</h2>
-        <p>{{ progresso }}%</p>
-      </article>
-    </section>
-
-    <section class="area-estudos">
-      <h2>Sua jornada de aprendizagem</h2>
-      <p>
-        {{ jaComecou
-          ? 'Continue de onde você parou e avance no seu aprendizado.'
-          : 'Sua jornada está pronta para começar. Vamos nessa?' }}
-      </p>
+    <template v-else>
+      <section class="resumo">
         
-      <button class="botao-estudar" @click="iniciarEstudos">
-        {{ jaComecou ? 'Continuar estudos →' : 'Iniciar estudos →' }}
-      </button>
-      <div class="area-teste">
-  <label>
-    Horas estudadas:
-    <input v-model.number="horasEstudadas" type="number" min="0" step="0.5">
-  </label>
+<article class="card-resumo">
+  <h2>Horas estudadas</h2>
+  <p>
+    {{
+      Math.floor((horasEstudadas || 0) * 3600 / 3600)
+    }} h
+    {{
+      Math.floor(((horasEstudadas || 0) * 3600) % 3600 / 60)
+    }} min
+    {{
+      Math.floor(((horasEstudadas || 0) * 3600) % 60)
+    }} s
+  </p>
+</article>
 
-  <label>
-    Progresso (%):
-    <input v-model.number="progresso" type="number" min="0" max="100">
-  </label>
 
-  <button @click="salvarProgresso">
-    Salvar progresso de teste
-  </button>
+        <article class="card-resumo">
+          <h2>Progresso geral</h2>
+          <p>{{ progresso }}%</p>
+        </article>
+      </section>
 
-  <p v-if="erro">{{ erro }}</p>
-</div>
-    </section>
+      <section class="area-estudos">
+        <h2>Sua jornada de aprendizagem</h2>
+        <p>
+          {{ jaComecou
+            ? 'Continue de onde você parou e avance no seu aprendizado.'
+            : 'Sua jornada está pronta para começar. Vamos nessa?' }}
+        </p>
+
+        <button class="botao-estudar" @click="iniciarEstudos">
+          {{ jaComecou ? 'Continuar estudos →' : 'Iniciar estudos →' }}
+        </button>
+      </section>
+    </template>
   </main>
 </template>
 
@@ -165,7 +207,6 @@ h1 {
   color: #9db8d0;
   max-width: 600px;
   line-height: 1.6;
-  margin-left: 100px;
 }
 
 .resumo {
@@ -204,7 +245,8 @@ h1 {
   border-radius: 12px;
 }
 
-.area-estudos h2 {
+.area-estudos h2,
+.area-teste h3 {
   color: #eaf6ff;
 }
 
@@ -213,7 +255,8 @@ h1 {
   line-height: 1.6;
 }
 
-.botao-estudar {
+.botao-estudar,
+.area-teste button {
   margin-top: 15px;
   padding: 14px 22px;
   background: #00d9f5;
@@ -224,7 +267,44 @@ h1 {
   cursor: pointer;
 }
 
-.botao-estudar:hover {
+.botao-estudar:hover,
+.area-teste button:hover {
   background: #66edff;
+}
+
+.area-teste {
+  display: grid;
+  gap: 15px;
+  max-width: 400px;
+  margin-top: 30px;
+}
+
+.area-teste label {
+  display: grid;
+  gap: 8px;
+  color: #9db8d0;
+}
+
+.area-teste input {
+  padding: 10px;
+  border: 1px solid #2b405e;
+  border-radius: 6px;
+  background: #080f20;
+  color: white;
+}
+
+.area-teste button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.mensagem-erro {
+  color: #ff8e8e;
+}
+
+@media (max-width: 600px) {
+  .painel-python {
+    padding: 24px 18px;
+  }
 }
 </style>

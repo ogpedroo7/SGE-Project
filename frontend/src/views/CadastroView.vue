@@ -17,7 +17,7 @@ async function cadastrar() {
   }
 
   try {
-    const resposta = await fetch('http://127.0.0.1:8000/usuarios/cadastro', {
+    const resposta = await fetch(`${import.meta.env.VITE_API_URL}/usuarios/cadastro`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

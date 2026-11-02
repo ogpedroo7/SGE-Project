@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { requisicaoAutenticada } from '../auth'
 
 const router = useRouter()
-const API = 'http://127.0.0.1:8000'
+const API = import.meta.env.VITE_API_URL
 const materia = 'Python'
 
 let usuario = null

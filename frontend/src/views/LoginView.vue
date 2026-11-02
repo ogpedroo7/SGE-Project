@@ -14,7 +14,7 @@ async function entrar() {
   }
 
   try {
-    const resposta = await fetch('http://127.0.0.1:8000/usuarios/login', {
+    const resposta = await fetch(`${import.meta.env.VITE_API_URL}/usuarios/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

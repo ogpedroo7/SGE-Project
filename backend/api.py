@@ -666,6 +666,12 @@ def salvar_pagina(
     "/usuarios/{usuario_id}/materias/{materia}/curso/aula/responder",
     dependencies=[Depends(verificar_token)],
 )
+
+# Registra e corrige a resposta de um exercício de aula.
+@app.post(
+    "/usuarios/{usuario_id}/materias/{materia}/curso/aula/responder",
+    dependencies=[Depends(verificar_token)],
+)
 def responder_aula(
     usuario_id: int,
     materia: str,
@@ -674,11 +680,25 @@ def responder_aula(
     materia = validar_materia(materia)
     exigir_nivel_disponivel(usuario_id, materia, dados.nivel)
 
-    resposta_correta(dados.nivel, dados.pagina)
+    # Verifica a alternativa antes de concluir a página.
+    correta = resposta_correta(dados.nivel, dados.pagina)
+    acertou = dados.resposta.strip().lower() == correta
 
     estado = obter_estado(usuario_id, materia)
     paginas = set(json.loads(estado["paginas_concluidas"]))
-    paginas.add(f"{dados.nivel}:{dados.pagina}")
+    chave = f"{dados.nivel}:{dados.pagina}"
+
+    # Se errar, não conclui a página nem altera o progresso.
+    if not acertou:
+        return {
+            "acertou": False,
+            "mensagem": "Resposta incorreta. Tente novamente!",
+            "paginas_concluidas": sorted(paginas),
+            "progresso": progresso_percentual(usuario_id, materia),
+        }
+
+    # Só registra a conclusão quando a resposta estiver correta.
+    paginas.add(chave)
 
     with conectar_banco() as conexao:
         conexao.execute(
@@ -702,10 +722,12 @@ def responder_aula(
     atualizar_resumo(usuario_id, materia)
 
     return {
-        "mensagem": "Resposta registrada. Você já pode continuar.",
+        "acertou": True,
+        "mensagem": "Resposta correta! Página concluída.",
         "paginas_concluidas": sorted(paginas),
         "progresso": progresso_percentual(usuario_id, materia),
     }
+
 
 
 # Registra o tempo estudado.

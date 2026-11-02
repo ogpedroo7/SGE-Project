@@ -194,9 +194,14 @@ async function verificarRespostaAula() {
       }
     )
 
-    paginasConcluidas.value = resultado.paginas_concluidas || []
-    resultadoAula.value = { registrada: true }
-    mensagem.value = resultado.mensagem
+    if (resultado.acertou) {
+  paginasConcluidas.value = resultado.paginas_concluidas || []
+  resultadoAula.value = { acertou: true }
+  mensagem.value = ''
+} else {
+  resultadoAula.value = { acertou: false }
+  mensagem.value = ''
+}
   } catch (e) {
     mensagem.value = e.message
   } finally {
@@ -583,16 +588,25 @@ onUnmounted(() => {
             <span>{{ opcao.texto }}</span>
           </label>
 
-          <p v-if="resultadoAula" class="resultado correto">
-  Resposta registrada. Você já pode continuar.
+        <p
+  v-if="resultadoAula?.acertou"
+  class="resultado correto"
+>
+  ✅ Resposta correta! Página concluída.
 </p>
 
+<p
+  v-else-if="resultadoAula && !resultadoAula.acertou"
+  class="resultado"
+>
+  ❌ Resposta incorreta. Tente novamente!
+</p>
           <p v-if="mensagem" class="mensagem">{{ mensagem }}</p>
 
           <button
   v-if="!paginaConcluida"
   class="botao-principal"
-  :disabled="salvando || !!resultadoAula"
+  :disabled="salvando || resultadoAula?.acertou"
   @click="verificarRespostaAula"
 >
   {{ salvando ? 'Registrando...' : 'Registrar resposta' }}

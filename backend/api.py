@@ -2,7 +2,8 @@ import hashlib
 import hmac
 import json
 import secrets
-import sqlite3
+import psycopg
+from psycopg.errors import UniqueViolation
 import os
 import jwt
 from datetime import datetime, timedelta, timezone
@@ -262,7 +263,7 @@ def validar_materia(materia):
 def buscar_usuario(usuario_id):
     with conectar_banco() as conexao:
         usuario = conexao.execute(
-            "SELECT id FROM usuarios WHERE id = ?",
+            "SELECT id FROM usuarios WHERE id = %s",
             (usuario_id,),
         ).fetchone()
 
@@ -276,8 +277,9 @@ def obter_estado(usuario_id, materia):
     with conectar_banco() as conexao:
         conexao.execute(
             """
-            INSERT OR IGNORE INTO progresso_aulas (usuario_id, materia)
-            VALUES (?, ?)
+            INSERT INTO progresso_aulas (usuario_id, materia)
+            VALUES (%s, %s)
+            ON CONFLICT (usuario_id, materia) DO NOTHING
             """,
             (usuario_id, materia),
         )
@@ -285,7 +287,7 @@ def obter_estado(usuario_id, materia):
         estado = conexao.execute(
             """
             SELECT * FROM progresso_aulas
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             """,
             (usuario_id, materia),
         ).fetchone()
@@ -298,7 +300,7 @@ def progresso_percentual(usuario_id, materia):
         registros = conexao.execute(
             """
             SELECT paginas_concluidas FROM progresso_aulas
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             """,
             (usuario_id, materia),
         ).fetchall()
@@ -324,7 +326,7 @@ def atualizar_resumo(usuario_id, materia):
             """
             INSERT INTO progresso_estudos
                 (usuario_id, materia, horas_estudadas, progresso, nivel)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT(usuario_id, materia) DO UPDATE SET
                 horas_estudadas = excluded.horas_estudadas,
                 progresso = excluded.progresso,
@@ -458,16 +460,15 @@ def cadastrar_usuario(dados: CadastroUsuario):
             cursor = conexao.execute(
                 """
                 INSERT INTO usuarios (nome, email, senha_hash)
-                VALUES (?, ?, ?)
+                VALUES (%s, %s, %s)
+                RETURNING id
                 """,
                 (nome, email, gerar_hash_senha(dados.senha)),
             )
-            usuario_id = cursor.lastrowid
+            usuario_id = cursor.fetchone()["id"]
 
-    except sqlite3.IntegrityError as erro:
-        if "UNIQUE constraint failed" in str(erro):
-            raise HTTPException(409, "Este e-mail já está cadastrado.")
-        raise
+    except UniqueViolation:
+        raise HTTPException(409, "Este e-mail já está cadastrado.")
 
     return {
         "mensagem": "Conta criada com sucesso!",
@@ -486,7 +487,7 @@ def login(dados: LoginUsuario):
             """
             SELECT id, nome, email, senha_hash
             FROM usuarios
-            WHERE email = ?
+            WHERE email = %s
             """,
             (dados.email.strip().lower(),),
         ).fetchone()
@@ -522,7 +523,7 @@ def listar_progressos(usuario_id: int):
             """
             SELECT materia, horas_estudadas, progresso, nivel
             FROM progresso_estudos
-            WHERE usuario_id = ?
+            WHERE usuario_id = %s
             ORDER BY materia
             """,
             (usuario_id,),
@@ -545,7 +546,7 @@ def obter_progresso(usuario_id: int, materia: str):
             """
             SELECT materia, horas_estudadas, progresso, nivel
             FROM progresso_estudos
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             """,
             (usuario_id, materia),
         ).fetchone()
@@ -576,7 +577,7 @@ def obter_curso(usuario_id: int, materia: str):
             """
             SELECT nivel, resumo_concluido, aprovado
             FROM niveis_curso
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             ORDER BY nivel
             """,
             (usuario_id, materia),
@@ -586,7 +587,7 @@ def obter_curso(usuario_id: int, materia: str):
             """
             SELECT nivel, questao_id, resposta, acertou
             FROM respostas_quiz
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             ORDER BY nivel, questao_id
             """,
             (usuario_id, materia),
@@ -645,8 +646,8 @@ def salvar_pagina(
         conexao.execute(
             """
             UPDATE progresso_aulas
-            SET nivel = ?, pagina = ?, atualizado_em = CURRENT_TIMESTAMP
-            WHERE usuario_id = ? AND materia = ?
+            SET nivel = %s, pagina = %s, atualizado_em = CURRENT_TIMESTAMP
+            WHERE usuario_id = %s AND materia = %s
             """,
             (dados.nivel, dados.pagina, usuario_id, materia),
         )
@@ -699,11 +700,11 @@ def responder_aula(
         conexao.execute(
             """
             UPDATE progresso_aulas
-            SET paginas_concluidas = ?,
-                nivel = ?,
-                pagina = ?,
+            SET paginas_concluidas = %s,
+                nivel = %s,
+                pagina = %s,
                 atualizado_em = CURRENT_TIMESTAMP
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             """,
             (
                 json.dumps(sorted(paginas)),
@@ -742,9 +743,9 @@ def registrar_tempo(
         conexao.execute(
             """
             UPDATE progresso_aulas
-            SET segundos_estudados = segundos_estudados + ?,
+            SET segundos_estudados = segundos_estudados + %s,
                 atualizado_em = CURRENT_TIMESTAMP
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             """,
             (dados.segundos, usuario_id, materia),
         )
@@ -756,7 +757,7 @@ def registrar_tempo(
             """
             SELECT segundos_estudados
             FROM progresso_aulas
-            WHERE usuario_id = ? AND materia = ?
+            WHERE usuario_id = %s AND materia = %s
             """,
             (usuario_id, materia),
         ).fetchone()["segundos_estudados"]
@@ -786,7 +787,7 @@ def concluir_resumo(
             """
             INSERT INTO niveis_curso
                 (usuario_id, materia, nivel, resumo_concluido)
-            VALUES (?, ?, ?, 1)
+            VALUES (%s, %s, %s, 1)
             ON CONFLICT(usuario_id, materia, nivel)
             DO UPDATE SET
                 resumo_concluido = 1,
@@ -820,7 +821,7 @@ def obter_quiz(
             """
             SELECT resumo_concluido
             FROM niveis_curso
-            WHERE usuario_id = ? AND materia = ? AND nivel = ?
+            WHERE usuario_id = %s AND materia = %s AND nivel = %s
             """,
             (usuario_id, materia, nivel),
         ).fetchone()
@@ -829,7 +830,7 @@ def obter_quiz(
             """
             SELECT questao_id, resposta, acertou
             FROM respostas_quiz
-            WHERE usuario_id = ? AND materia = ? AND nivel = ?
+            WHERE usuario_id = %s AND materia = %s AND nivel = %s
             """,
             (usuario_id, materia, nivel),
         ).fetchall()
@@ -886,7 +887,7 @@ def responder_quiz(
             """
             SELECT resumo_concluido
             FROM niveis_curso
-            WHERE usuario_id = ? AND materia = ? AND nivel = ?
+            WHERE usuario_id = %s AND materia = %s AND nivel = %s
             """,
             (usuario_id, materia, dados.nivel),
         ).fetchone()
@@ -902,7 +903,7 @@ def responder_quiz(
             """
             SELECT acertou
             FROM respostas_quiz
-            WHERE usuario_id = ? AND materia = ? AND nivel = ? AND questao_id = ?
+            WHERE usuario_id = %s AND materia = %s AND nivel = %s AND questao_id = %s
             """,
             (usuario_id, materia, dados.nivel, dados.questao_id),
         ).fetchone()
@@ -915,11 +916,11 @@ def responder_quiz(
             """
             INSERT INTO respostas_quiz
                 (usuario_id, materia, nivel, questao_id, resposta, acertou)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT(usuario_id, materia, nivel, questao_id)
             DO UPDATE SET
                 resposta = excluded.resposta,
-                acertou = MAX(respostas_quiz.acertou, excluded.acertou),
+                acertou = GREATEST(respostas_quiz.acertou, excluded.acertou),
                 respondido_em = CURRENT_TIMESTAMP
             """,
             (
@@ -938,7 +939,7 @@ def responder_quiz(
                 COUNT(*) AS respondidas,
                 COALESCE(SUM(acertou), 0) AS acertos
             FROM respostas_quiz
-            WHERE usuario_id = ? AND materia = ? AND nivel = ?
+            WHERE usuario_id = %s AND materia = %s AND nivel = %s
             """,
             (usuario_id, materia, dados.nivel),
         ).fetchone()
@@ -950,7 +951,7 @@ def responder_quiz(
                 """
                 INSERT INTO niveis_curso
                     (usuario_id, materia, nivel, resumo_concluido, aprovado)
-                VALUES (?, ?, ?, 1, 1)
+                VALUES (%s, %s, %s, 1, 1)
                 ON CONFLICT(usuario_id, materia, nivel)
                 DO UPDATE SET
                     aprovado = 1,
@@ -964,9 +965,9 @@ def responder_quiz(
             conexao.execute(
                 """
                 UPDATE progresso_aulas
-                SET nivel = ?, pagina = 1,
+                SET nivel = %s, pagina = 1,
                     atualizado_em = CURRENT_TIMESTAMP
-                WHERE usuario_id = ? AND materia = ?
+                WHERE usuario_id = %s AND materia = %s
                 """,
                 (proximo, usuario_id, materia),
             )
@@ -978,7 +979,7 @@ def responder_quiz(
             """
             SELECT questao_id
             FROM respostas_quiz
-            WHERE usuario_id = ? AND materia = ? AND nivel = ? AND acertou = 0
+            WHERE usuario_id = %s AND materia = %s AND nivel = %s AND acertou = 0
             ORDER BY CAST(questao_id AS INTEGER)
             """,
             (usuario_id, materia, dados.nivel),

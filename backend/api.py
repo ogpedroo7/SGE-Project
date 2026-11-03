@@ -661,11 +661,6 @@ def salvar_pagina(
     }
 
 
-# Registra a resposta de um exercício de aula.
-@app.post(
-    "/usuarios/{usuario_id}/materias/{materia}/curso/aula/responder",
-    dependencies=[Depends(verificar_token)],
-)
 
 # Registra e corrige a resposta de um exercício de aula.
 @app.post(

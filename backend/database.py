@@ -1,21 +1,44 @@
 import os
-import psycopg
+from threading import Lock
+
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+
+
+_pool = None
+_pool_lock = Lock()
 
 
 def conectar_banco():
-    """Abre uma conexão PostgreSQL; o bloco with confirma/descarta e fecha a conexão."""
+    """Obtém uma conexão reutilizável do pool PostgreSQL."""
+    global _pool
+
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "A variável DATABASE_URL não foi configurada no ambiente."
         )
 
-    return psycopg.connect(
-        database_url,
-        row_factory=dict_row,
-        connect_timeout=10,
-    )
+    # Cria o pool apenas quando a primeira requisição precisar do banco.
+    # Assim, a importação do módulo não tenta conectar antes da configuração.
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ConnectionPool(
+                    conninfo=database_url,
+                    min_size=1,
+                    max_size=5,
+                    timeout=10,
+                    kwargs={
+                        "row_factory": dict_row,
+                        "connect_timeout": 10,
+                    },
+                    open=True,
+                )
+
+    # Todos os usos existentes seguem com: with conectar_banco() as conexao:
+    # Ao sair do bloco, a conexão volta ao pool em vez de fechar o socket.
+    return _pool.connection()
 
 
 def criar_tabelas():

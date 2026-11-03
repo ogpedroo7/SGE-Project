@@ -20,6 +20,8 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
+from backend.database import criar_tabelas
+
 
 BASE_DIR = Path(__file__).resolve().parent
 CAMINHO_SQLITE = BASE_DIR / "SGE.db"
@@ -120,6 +122,9 @@ def migrar():
 
     totais = {tabela: len(linhas) for tabela, linhas in dados.items()}
 
+    # Garante que o esquema existe antes da migração.
+    criar_tabelas()
+
     with conectar_neon() as pg:
         # Valida o esquema antes de escrever qualquer registro.
         tabelas_pg = {
@@ -140,6 +145,21 @@ def migrar():
                 + ". Configure DATABASE_URL e inicialize o esquema primeiro."
             )
 
+        # Esta rotina foi projetada para um Neon vazio: evita misturar dados
+        # anteriores ou esconder conflitos de IDs/e-mails.
+        tabelas_com_dados = []
+        for tabela in TABELAS:
+            total_existente = pg.execute(
+                f'SELECT COUNT(*) AS total FROM "{tabela}"'
+            ).fetchone()["total"]
+            if total_existente:
+                tabelas_com_dados.append(f"{tabela} ({total_existente})")
+        if tabelas_com_dados:
+            raise RuntimeError(
+                "O Neon não está vazio. Migração cancelada sem inserir dados. "
+                "Revise as tabelas: " + ", ".join(tabelas_com_dados)
+            )
+
         for tabela, linhas in dados.items():
             if not linhas:
                 continue
@@ -155,21 +175,16 @@ def migrar():
             for linha in linhas:
                 pg.execute(sql, tuple(linha[c] for c in colunas))
 
-        # IDs foram preservados; sincroniza sequências para novos cadastros.
+        # IDs foram preservados; sincroniza as sequências para novos cadastros.
         for tabela in TABELAS:
             pg.execute(
-                """
+                f"""
                 SELECT setval(
-                    pg_get_serial_sequence(%s, 'id'),
-                    GREATEST(COALESCE((SELECT MAX(id) FROM """
-                + f'"{tabela}"' +
-                """), 1), 1),
-                    COALESCE((SELECT MAX(id) FROM """
-                + f'"{tabela}"' +
-                """) IS NOT NULL)
+                    pg_get_serial_sequence('public.{tabela}', 'id'),
+                    COALESCE((SELECT MAX(id) FROM "{tabela}"), 1),
+                    EXISTS (SELECT 1 FROM "{tabela}")
                 )
-                """,
-                (f"public.{tabela}",),
+                """
             )
 
         # Conta os registros após os inserts e valida que todos existem.

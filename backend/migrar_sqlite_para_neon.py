@@ -194,7 +194,7 @@ def migrar():
                 f'SELECT COUNT(*) AS total FROM "{tabela}"'
             ).fetchone()["total"]
             totais_pg[tabela] = total_pg
-            if total_pg < esperado:
+            if total_pg != esperado:
                 raise RuntimeError(
                     f"Validação falhou em {tabela}: SQLite tem {esperado}, "
                     f"Neon tem {total_pg}. A transação será revertida."
